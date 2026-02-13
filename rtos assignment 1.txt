@@ -1,0 +1,111 @@
+#include <stdint.h>
+
+/* ================= Cortex-M SysTick ================= */
+#define SYST_CSR   (*((volatile uint32_t *)0xE000E010))
+#define SYST_RVR   (*((volatile uint32_t *)0xE000E014))
+#define SYST_CVR   (*((volatile uint32_t *)0xE000E018))
+
+/* ================= System Clock ================= */
+uint32_t SystemCoreClock = 16000000U;
+
+void SystemCoreClockUpdate(void) {
+    SystemCoreClock = 16000000U;
+}
+
+/* ================= Tick Counter ================= */
+static volatile uint32_t tick = 0;
+
+void SysTick_Handler(void) {
+    tick++;
+}
+
+void delay(uint32_t t) {
+    uint32_t start = tick;
+    while ((tick - start) < t) {}
+}
+
+/* ================= Fake Tasks ================= */
+void task1(void) {
+    while (1) {
+        delay(500);   /* Task 1 alive */
+    }
+}
+
+void task2(void) {
+    while (1) {
+        delay(500);   /* SHOULD run – but will NOT */
+    }
+}
+
+/* ================= Stacks ================= */
+uint32_t stack1[64] __attribute__((aligned(8)));
+uint32_t stack2[64] __attribute__((aligned(8)));
+
+uint32_t *sp1 = &stack1[64];
+uint32_t *sp2 = &stack2[64];
+
+/* ================= Main ================= */
+int main(void) {
+
+    /* ---- SysTick init (1 ms) ---- */
+    SystemCoreClockUpdate();
+    SYST_RVR = (SystemCoreClock / 1000U) - 1;
+    SYST_CVR = 0;
+    SYST_CSR = 0x07;   /* ENABLE | TICKINT | CLKSOURCE */
+
+    /* =================================================
+       Fabricate stack frame for Task 1 (CORRECT)
+       ================================================= */
+    *(--sp1) = (1U << 24);          /* xPSR */
+    *(--sp1) = (uint32_t)&task1;    /* PC */
+    *(--sp1) = 0xFFFFFFFD;          /* LR */
+    *(--sp1) = 0x12;                /* R12 */
+    *(--sp1) = 0x03;                /* R3 */
+    *(--sp1) = 0x02;                /* R2 */
+    *(--sp1) = 0x01;                /* R1 */
+    *(--sp1) = 0x00;                /* R0 */
+
+    *(--sp1) = 0x0B; /* R11 */
+    *(--sp1) = 0x0A; /* R10 */
+    *(--sp1) = 0x09; /* R9  */
+    *(--sp1) = 0x08; /* R8  */
+    *(--sp1) = 0x07; /* R7  */
+    *(--sp1) = 0x06; /* R6  */
+    *(--sp1) = 0x05; /* R5  */
+    *(--sp1) = 0x04; /* R4  */
+
+    /* =================================================
+       Fabricate stack frame for Task 2 (PC HACKED ?)
+       ================================================= */
+    *(--sp2) = (1U << 24);          /* xPSR */
+    *(--sp2) = 0x12345678;          /* ? WRONG PC */
+    *(--sp2) = 0xFFFFFFFD;          /* LR */
+    *(--sp2) = 0x12;
+    *(--sp2) = 0x03;
+    *(--sp2) = 0x02;
+    *(--sp2) = 0x01;
+    *(--sp2) = 0x00;
+
+    *(--sp2) = 0x0B;
+    *(--sp2) = 0x0A;
+    *(--sp2) = 0x09;
+    *(--sp2) = 0x08;
+    *(--sp2) = 0x07;
+    *(--sp2) = 0x06;
+    *(--sp2) = 0x05;
+    *(--sp2) = 0x04;
+
+    /* =================================================
+       Start Task 1 (correct execution)
+       ================================================= */
+    __asm volatile (
+        "MOV SP, %0      \n"
+        "POP {R4-R11}    \n"
+        "POP {R0-R3,R12,LR,PC} \n"
+        :
+        : "r"(sp1)
+    );
+
+    /* NEVER reaches here */
+    while (1) {}
+}
